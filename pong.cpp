@@ -1,154 +1,115 @@
+/**
+ * Pong  –  Motor Grafic C++ cu Raylib & OOP
+ *
+ * Caracteristici Modern C++:
+ *   • Smart pointers (unique_ptr) pentru ownership explicit al obiectelor
+ *   • Template GameObjectManager<T> pentru gestionarea colecțiilor polimorfice
+ *   • STL: std::vector, std::array, std::all_of, std::remove_if, std::map
+ *   • Moștenire & polimorfism virtual: IGameObject → Paddle → CpuPaddle
+ *   • Factory methods statice (Paddle::Create, Ball::Create, Tetromino::Spawn)
+ */
+
 #include <raylib.h>
-#include <iostream>
+#include <memory>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <functional>
 
-Color Green = Color{38, 185, 154, 255};
-Color Dark_Green = Color{20, 160, 133, 255};
-Color Light_Green = Color{129, 204, 184, 255};
-Color Yellow = Color{243, 213, 91, 255};
+#include "IGameObject.hpp"
+#include "Ball.hpp"
+#include "Paddle.hpp"
 
-int player_score = 0;
-int cpu_score = 0;
+// ─── Colour palette re-exported for main ──────────────────────────────────
+static constexpr Color BG_COLOR    = COL_DARK_GREEN;
+static constexpr Color ACCENT      = COL_GREEN;
+static constexpr Color CIRCLE_COL  = COL_LIGHT_GREEN;
 
-class Ball {
- public:
-    float x, y;
-    int speed_x, speed_y;
-    int radius;
+// ─── Helper: AABB from Paddle reference ───────────────────────────────────
+static inline Rectangle PaddleRect(const Paddle& p) {
+    return { p.x, p.y, p.width, p.height };
+}
 
-    void Draw() {
-        DrawCircle(x, y, radius, Yellow);
+// ─── Game state ────────────────────────────────────────────────────────────
+struct PongGame {
+    std::unique_ptr<Ball>      ball;
+    std::unique_ptr<Paddle>    player;
+    std::unique_ptr<CpuPaddle> cpu;
+
+    // Particle trail (STL vector of positions) for visual flair
+    std::vector<Vector2> trail;
+    static constexpr std::size_t TRAIL_MAX = 20;
+
+    void Init(int sw, int sh) {
+        ball   = Ball::Create(sw / 2.f, sh / 2.f, 7.f, 7.f, 20);
+        player = Paddle::Create(sw - 35.f,  sh / 2.f - 60.f, 25.f, 120.f, 6.f);
+        cpu    = CpuPaddle::Create(10.f,    sh / 2.f - 60.f, 25.f, 120.f, 6.f);
     }
 
     void Update() {
-        x += speed_x;
-        y += speed_y;
+        ball->Update();
+        player->Update();
+        cpu->Update(ball->y);
 
-        if (y + radius >= GetScreenHeight() || y - radius <= 0) {
-            speed_y *= -1;
-        }
-        // Cpu wins
-        if (x + radius >= GetScreenWidth()) {
-            cpu_score++;
-            ResetBall();
-        }
+        // Collisions
+        auto checkHit = [&](Paddle& p) {
+            if (CheckCollisionCircleRec({ball->x, ball->y},
+                                        ball->radius, PaddleRect(p)))
+                ball->speed_x *= -1.f;
+        };
+        checkHit(*player);
+        checkHit(*cpu);
 
-        if (x - radius <= 0) {
-            player_score++;
-            ResetBall();
-        }
+        // Trail – push current position, cap length with STL
+        trail.push_back({ball->x, ball->y});
+        if (trail.size() > TRAIL_MAX)
+            trail.erase(trail.begin());
     }
 
-    void ResetBall() {
-        x = GetScreenWidth() / 2;
-        y = GetScreenHeight() / 2;
+    void Draw(int sw, int sh) const {
+        ClearBackground(BG_COLOR);
 
-        int speed_choices[2] = {-1, 1};
-        speed_x *= speed_choices[GetRandomValue(0, 1)];
-        speed_y *= speed_choices[GetRandomValue(0, 1)];
-    }
-};
+        // Court markings
+        DrawRectangle(sw / 2, 0, sw / 2, sh, ACCENT);
+        DrawCircle(sw / 2, sh / 2, 150, CIRCLE_COL);
+        DrawLine(sw / 2, 0, sw / 2, sh, WHITE);
 
-class Paddle {
- protected:
-    void LimitMovement() {
-        if (y <= 0) {
-            y = 0;
+        // Ball trail (alpha decreases with age — modern range-for + index)
+        for (std::size_t i = 0; i < trail.size(); ++i) {
+            float alpha = static_cast<float>(i) / TRAIL_MAX;
+            Color c = COL_YELLOW;
+            c.a = static_cast<unsigned char>(alpha * 180);
+            DrawCircle(static_cast<int>(trail[i].x),
+                       static_cast<int>(trail[i].y),
+                       ball->radius * alpha, c);
         }
-        if (y + height >= GetScreenHeight()) {
-            y = GetScreenHeight() - height;
-        }
-    }
 
- public:
-    float x, y;
-    float width, height;
-    int speed;
+        ball->Draw();
+        cpu->Draw();
+        player->Draw();
 
-    void Draw() {
-        DrawRectangleRounded(Rectangle{x, y, width, height}, 0.8, 0, WHITE);
-    }
-
-    void Update() {
-        if (IsKeyDown(KEY_UP)) {
-            y = y - speed;
-        }
-        if (IsKeyDown(KEY_DOWN)) {
-            y = y + speed;
-        }
-        LimitMovement();
+        // Scores
+        DrawText(TextFormat("%i", ball->CpuScore()),
+                 sw / 4 - 20, 20, 80, WHITE);
+        DrawText(TextFormat("%i", ball->PlayerScore()),
+                 3 * sw / 4 - 20, 20, 80, WHITE);
     }
 };
 
-class CpuPaddle : public Paddle {
- public:
-    void Update(int ball_y){
-        if (y + height / 2 > ball_y) {
-            y = y - speed;
-        }
-        if (y + height / 2 <= ball_y) {
-            y = y + speed;
-        }
-        LimitMovement();
-    }
-};
-
-Ball ball;
-Paddle player;
-CpuPaddle cpu;
-
+// ─── Entry point ──────────────────────────────────────────────────────────
 int main() {
-    std::cout << "Starting the game" << std::endl;
-    const int screen_width = 1280;
-    const int screen_height = 800;
-    InitWindow(screen_width, screen_height, "My Pong Game!");
+    constexpr int SW = 1280, SH = 800;
+    InitWindow(SW, SH, "Pong  –  C++ Modern / Raylib");
     SetTargetFPS(60);
-    ball.radius = 20;
-    ball.x = screen_width / 2;
-    ball.y = screen_height / 2;
-    ball.speed_x = 7;
-    ball.speed_y = 7;
 
-    player.width = 25;
-    player.height = 120;
-    player.x = screen_width - player.width - 10;
-    player.y = screen_height / 2 - player.height / 2;
-    player.speed = 6;
+    // Game state owned on the stack; internal objects via unique_ptr
+    PongGame game;
+    game.Init(SW, SH);
 
-    cpu.height = 120;
-    cpu.width = 25;
-    cpu.x = 10;
-    cpu.y = screen_height / 2 - cpu.height / 2;
-    cpu.speed = 6;
-
-    while (WindowShouldClose() == false) {
+    while (!WindowShouldClose()) {
+        game.Update();
         BeginDrawing();
-
-        // Updating
-
-        ball.Update();
-        player.Update();
-        cpu.Update(ball.y);
-
-        // Checking for collisions
-        if (CheckCollisionCircleRec({ball.x, ball.y}, ball.radius, {player.x, player.y, player.width, player.height})) {
-            ball.speed_x *= -1;
-        }
-
-        if (CheckCollisionCircleRec({ball.x, ball.y}, ball.radius, {cpu.x, cpu.y, cpu.width, cpu.height})) {
-            ball.speed_x *= -1;
-        }
-
-        // Drawing
-        ClearBackground(Dark_Green);
-        DrawRectangle(screen_width / 2, 0, screen_width / 2, screen_height, Green);
-        DrawCircle(screen_width / 2, screen_height / 2, 150, Light_Green);
-        DrawLine(screen_width / 2, 0, screen_width / 2, screen_height, WHITE);
-        ball.Draw();
-        cpu.Draw();
-        player.Draw();
-        DrawText(TextFormat("%i", cpu_score), screen_width / 4 - 20, 20, 80, WHITE);
-        DrawText(TextFormat("%i", player_score), 3 * screen_width / 4 - 20, 20, 80, WHITE);
-
+        game.Draw(SW, SH);
         EndDrawing();
     }
 
